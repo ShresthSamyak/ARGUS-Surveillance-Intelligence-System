@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argus"
+version = "0.1.0"
+description = "Surveillance intelligence layer over fixed CCTV: persistent ownership graph, per-bag risk FSM, explainable alerts."
+requires-python = ">=3.10"
+authors = [{ name = "Shresth Samyak" }]
+
+# Core deps for the scaffold + ingestion layer. Heavier ML/serving deps are
+# grouped as optional extras so a labeling/annotation box doesn't need CUDA.
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+perception = [
+    "ultralytics>=8.3",
+    "boxmot>=13.0",
+    "torch>=2.2",
+    "av>=12.0",              # PyAV decode (NVDEC where available)
+    "supervision>=0.20",     # polygon zones, annotators
+]
+reasoner = [
+    "redis>=5.0",
+    "psycopg[binary]>=3.1",
+]
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "websockets>=12.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.setuptools]
+packages = ["common", "perception", "reasoner", "vlm", "api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

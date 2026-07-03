@@ -1,0 +1,55 @@
+# ARGUS global parameter sheet — single source of truth for Layer 2 (Appendix A).
+#
+# Every number here is a STARTING POINT, to be calibrated on staged-scenario
+# reps 1-2 (§9.4) and FROZEN before scoring rep 3. Log the frozen values in the
+# report; declared-tuned-frozen parameters read far better than magic constants.
+
+ownership:
+  sigma_d_m: 0.8          # proximity kernel width, metres (§6.3)
+  weights: [0.40, 0.35, 0.25]   # [IoU-attachment, proximity, velocity-alignment]
+  decay: 0.995            # evidence EMA decay per tick -> ~20 s memory
+  tau_own: 8.0            # minimum accumulated evidence to assign an owner
+  margin: 1.5             # best must exceed 1.5x second-best (crowd guard)
+  confirm_s: 2.0          # assignment must hold this long
+  lookback_s: 5.0         # ring-buffer window for bag-birth retroactive evidence
+
+placement:
+  v_still_ms: 0.15        # bag ground speed below this = "still"
+  still_s: 2.0            # ...sustained this long -> PLACED
+  v_pickup_ms: 0.4        # bag speed above this + IoU with person -> PICKED_UP
+
+fsm:
+  r1_m: 2.0               # ATTENDED radius
+  r2_m: 5.0               # OWNER_NEAR outer radius
+  t1_s: 30                # unseen -> UNATTENDED
+  t2_s: 120               # unseen -> ABANDONED
+  dwell_s: 3.0            # hysteresis dwell for escalation guards
+
+zones:
+  baggage:    {weight: -10, t1_s: 300}
+  transit:    {weight: 0}
+  restricted: {weight: 15, t1_s: 10}
+
+risk:
+  base: {NEAR: 10, AWAY: 30, UNATTENDED: 60, ABANDONED: 90}
+  time_coeff: 8           # + time_coeff * min(t_away/t1, 2)
+  density_bonus: 6        # + if local person density > p90
+  exited_bonus: 10        # + if OWNER_EXITED_SCENE
+  unresolved_bonus: 10    # + if ownership UNRESOLVED
+  reacq_halflife_s: 10    # risk decay half-life on OWNER_REACQUIRED
+  watch_tier: 45          # R >= watch_tier -> yellow queue
+  alert_tier: 75          # R >= alert_tier -> red alert
+
+reid:
+  theta_base: 0.62        # base cosine acceptance for re-acquisition
+  theta_per_min: 0.02     # +per elapsed minute (appearance drifts)
+  theta_cap: 0.72
+  max_walk_speed_ms: 2.0  # spatio-temporal plausibility gate
+  bank_slots: 10          # embeddings per entity
+  admit_below_cos: 0.92   # admit new embedding only if diverse enough
+
+tracker:
+  det_stride: 2
+  track_buffer: 90        # ~7 s at 12.5 Hz det rate; bridges SECONDS only
+  high: 0.5               # stage-1 association threshold
+  low: 0.1                # stage-2 recovers low-conf dets in crowds

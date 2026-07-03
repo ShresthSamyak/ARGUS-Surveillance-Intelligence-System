@@ -1,0 +1,55 @@
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.3gp
+*.3g2
+*.mpg
+*.mpeg
+*.ts
+*.mts
+*.m2ts
+
+# ---- ARGUS ----
+# Local-only data lake (see §13 retention). Metadata manifests ARE tracked.
+data/raw/
+data/frames/
+data/labels/
+data/keyframes/
+data/snapshots/
+data/scenarios/
+!data/**/.gitkeep
+!data/**/*.csv
+!data/**/*manifest*
+
+# Model weights / exports
+*.pt
+*.onnx
+*.engine
+weights/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Env / secrets
+.env
+*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
