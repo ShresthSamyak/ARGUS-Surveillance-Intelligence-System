@@ -53,3 +53,28 @@ tracker:
   track_buffer: 90        # ~7 s at 12.5 Hz det rate; bridges SECONDS only
   high: 0.5               # stage-1 association threshold
   low: 0.1                # stage-2 recovers low-conf dets in crowds
+
+# ---- v0.2 additions ----
+
+presence:                 # §6.6 presence FSM (physical existence, orthogonal to custody)
+  occl_overlap: 0.30      # ROI counts OCCLUDED if person/blob overlaps >= this fraction
+  t_unconfirmed_s: 20     # unoccluded + no channel hit this long -> UNCONFIRMED
+  verify_sla_s: 30        # P0 VLM removal-verify SLA (holds on P-dedicated)
+
+watch_roi:                # §6.7 expectation-driven detection (L2 -> L1 feedback)
+  accept_conf: 0.15       # inside watch-ROIs, accept detector candidates down to this
+  static_every_frame: true  # run static channel every frame inside ROIs
+  corroborate_s: 2.0      # VLM-proposed object must be fast-path-confirmed within this
+
+vlm:                      # §5.7 slow-path subsystem
+  provider: locateanything3b   # swap: florence2 | grounding_dino | owlv2 (license-clean)
+  profile: P-timeslice    # P-offline | P-timeslice | P-dedicated (§3.3)
+  sweep_period_s: 90      # P3 reconciliation sweep cadence per camera
+  fingerprint_w: [0.40, 0.30, 0.20, 0.10]  # emb / parts / metric-size / color (§5.7)
+  retrain_gate_examples: 500   # hard-example count before a retrain is considered
+
+approach:                 # §7.1 repeated-approach / coordinated-interest rules
+  radius_m: 1.5
+  k: 3                    # approaches to a watched bag to flag
+  min_gap_s: 10           # minimum departure between approaches
+  window_s: 300

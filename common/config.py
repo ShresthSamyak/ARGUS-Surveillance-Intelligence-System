@@ -22,6 +22,14 @@ COCO_CLASSES: dict[int, str] = {0: "person", 24: "backpack", 26: "handbag", 28: 
 BAG_CLASSES: frozenset[str] = frozenset({"backpack", "handbag", "suitcase"})
 
 
+class BagSource(str, Enum):
+    """Provenance of a bag entity's originating detection (§6.1)."""
+
+    detector = "detector"
+    static_channel = "static_channel"
+    vlm_sweep = "vlm_sweep"        # v0.2: proposed by a slow-path VLM sweep
+
+
 class ZoneType(str, Enum):
     baggage = "baggage"        # expected stationary bags -> lower base risk, longer timers
     transit = "transit"        # corridors/gates -> bags should not dwell
@@ -78,7 +86,13 @@ class CameraConfig(BaseModel):
 
 
 class FSMConfig(BaseModel):
-    """Global parameter sheet (Appendix A). Single source of truth for L2."""
+    """Global parameter sheet (Appendix A). Single source of truth for L2.
+
+    Kept as loose dicts rather than nested models so a new tunable can be added
+    to configs/fsm.yaml without a code change during calibration. The v0.2
+    sections (presence/watch_roi/vlm/approach) default to empty so a v0.1-era
+    config still validates.
+    """
 
     ownership: dict = Field(default_factory=dict)
     placement: dict = Field(default_factory=dict)
@@ -87,6 +101,11 @@ class FSMConfig(BaseModel):
     risk: dict = Field(default_factory=dict)
     reid: dict = Field(default_factory=dict)
     tracker: dict = Field(default_factory=dict)
+    # ---- v0.2 ----
+    presence: dict = Field(default_factory=dict)    # §6.6
+    watch_roi: dict = Field(default_factory=dict)   # §6.7
+    vlm: dict = Field(default_factory=dict)         # §5.7
+    approach: dict = Field(default_factory=dict)    # §7.1
 
 
 # ---------------------------------------------------------------------------
