@@ -23,10 +23,16 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 from pathlib import Path
 
-import cv2
-from tqdm import tqdm
+# Silence FFmpeg's per-frame "Could not find ref with POC" HEVC noise. Must be set
+# before cv2 imports / VideoCapture creation. (With sequential decode below there
+# are no such errors anyway, but this keeps output clean if a GOP starts mid-file.)
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
+
+import cv2  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw"
@@ -78,19 +84,38 @@ def select(scores: list[tuple[int, float]], quota: int, min_gap_frames: int) -> 
 
 
 def extract(path: Path, cam_id: str, frame_idxs: list[int], out_dir: Path) -> list[dict]:
+    """Write full-res JPEGs at the selected indices via SEQUENTIAL decode.
+
+    Do NOT seek with CAP_PROP_POS_FRAMES: on inter-frame codecs (HEVC/H.264) it
+    lands on a frame whose reference frames were never decoded, yielding grey
+    "Could not find ref with POC" corruption (~90% of the frame lost). Decoding
+    in order keeps the decoder's reference state intact, so every retrieved frame
+    is clean. We grab() through the stream and retrieve() only at target indices,
+    stopping once the last target is written.
+    """
+    if not frame_idxs:
+        return []
+    targets = set(frame_idxs)
+    last = max(frame_idxs)
     cap = cv2.VideoCapture(str(path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     out_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
-    for fidx in tqdm(frame_idxs, desc=f"write {cam_id}", unit="img", leave=False):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
-        ok, frame = cap.read()
-        if not ok:
-            continue
-        fname = f"{cam_id}_{fidx:07d}.jpg"
-        cv2.imwrite(str(out_dir / fname), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        rows.append({"cam_id": cam_id, "file": fname, "frame_idx": fidx,
-                     "timestamp_s": round(fidx / fps, 2)})
+    idx = 0
+    pbar = tqdm(total=len(targets), desc=f"write {cam_id}", unit="img", leave=False)
+    while idx <= last:
+        if not cap.grab():                 # advance decoder (keeps reference state)
+            break
+        if idx in targets:
+            ok, frame = cap.retrieve()     # decode only the frames we keep
+            if ok:
+                fname = f"{cam_id}_{idx:07d}.jpg"
+                cv2.imwrite(str(out_dir / fname), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                rows.append({"cam_id": cam_id, "file": fname, "frame_idx": idx,
+                             "timestamp_s": round(idx / fps, 2)})
+                pbar.update(1)
+        idx += 1
+    pbar.close()
     cap.release()
     return rows
 
