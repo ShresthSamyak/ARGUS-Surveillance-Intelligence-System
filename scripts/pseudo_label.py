@@ -4,24 +4,24 @@ Grounds each sampled frame with LocateAnything (open-vocab → catches small/odd
 a fixed-class detector misses), dedups LA's repeated boxes, and writes YOLO-format
 CANDIDATE labels + a provenance manifest for import into CVAT. These are labels a
 human verifies/corrects — NOT final ground truth: LA over/under-detects, emits no
-confidence, and occasionally hallucinates. That's why the spec gates on a human audit
+confidence, and occasionally hallucinates. The spec gates on a human audit
 (>90% per-class precision) before any pseudo-label reaches training.
 
-MUST run in the argus-vlm env (has transformers 4.57.1 + LA deps):
-    & "C:\\Users\\HP\\anaconda3\\envs\\argus-vlm\\python.exe" scripts/pseudo_label.py --load-4bit --cams cam06 --limit 20
-    & "$vpy" scripts/pseudo_label.py --load-4bit          # full run, ~15-20 h at 4-bit
+LABELING SCHEMES (LA's <box> output carries NO class, so we prompt per class and tag
+by prompt — running all 4 bag/person prompts triple-counts the same bag):
+  * bag2  (default): prompts {person, bag}. No backpack/handbag/suitcase confusion,
+    ~2x faster; the human assigns the bag SUBCLASS in CVAT. Final dataset is still
+    4-class after refinement. Plays to LA's strength, avoids its weak subclassing.
+  * full4: prompts {person, backpack, handbag, suitcase} — one box per class per
+    location; expect cross-class bag dups a human must delete.
 
-Output (data/labels/pseudo/):
-    <cam>/<frame>.txt   YOLO: `cls cx cy w h` (normalized)   -- one per frame
-    classes.txt         person, backpack, handbag, suitcase
-    data.yaml           ultralytics dataset stub
-    manifest.csv        per-frame: n boxes/class + model/config provenance (§8.8)
+MUST run in the argus-vlm env (transformers 4.57.1 + LA deps):
+    & "$vpy" scripts/pseudo_label.py --load-4bit --cams cam06 --limit 20   # trial
+    & "$vpy" scripts/pseudo_label.py --load-4bit                            # full run
 
-Resumable: frames already labeled are skipped unless --overwrite.
-
---temporal (OFF by default): consistency filter for FUTURE consecutive-frame
-expansion — keep a box only if a same-class box (IoU>0.5) recurs in >=2 of 3 adjacent
-frames. Our current seed set is motion-SPREAD (non-adjacent), so it doesn't apply here.
+Output (data/labels/pseudo/): <cam>/<frame>.txt (YOLO), classes.txt, data.yaml,
+manifest.csv (per-frame counts + model/revision provenance). Resumable (skips done
+frames unless --overwrite).
 """
 
 from __future__ import annotations
@@ -39,51 +39,64 @@ if str(ROOT) not in sys.path:
 FRAMES_DIR = ROOT / "data" / "frames"
 OUT_DIR = ROOT / "data" / "labels" / "pseudo"
 
-# Our detection classes -> contiguous YOLO ids (fine-tune head is re-init'd for nc=4).
-CLASSES = ["person", "backpack", "handbag", "suitcase"]
-CLASS_ID = {c: i for i, c in enumerate(CLASSES)}
+# (class_label, LA prompt text). The bag prompt lists synonyms to maximize recall;
+# all its boxes collapse to the single "bag" class for later human subclassing.
+SCHEMES: dict[str, list[tuple[str, str]]] = {
+    "bag2": [("person", "person"),
+             ("bag", "backpack, handbag, suitcase, or bag on the floor")],
+    "full4": [("person", "person"), ("backpack", "backpack"),
+              ("handbag", "handbag"), ("suitcase", "suitcase")],
+}
+
+# Dense library-baggage cams: static racks pile up dozens of bags that LA triple-
+# counts (~143 noisy boxes/frame) -> cheaper to hand-label from scratch than to clean.
+# Design = merge of scheme options 1 (bag2) + 3 (LA on sparse cams only): pseudo-label
+# the sparse cams; RESERVE these for manual CVAT annotation. A full run skips them
+# unless --include-manual; naming one explicitly in --cams still overrides.
+MANUAL_CAMS = {"cam06", "cam07"}
 
 
 def to_yolo(box: list[float], w: int, h: int) -> tuple[float, float, float, float]:
     x1, y1, x2, y2 = box
-    cx, cy = (x1 + x2) / 2 / w, (y1 + y2) / 2 / h
-    bw, bh = (x2 - x1) / w, (y2 - y1) / h
-    return cx, cy, bw, bh
+    return (x1 + x2) / 2 / w, (y1 + y2) / 2 / h, (x2 - x1) / w, (y2 - y1) / h
 
 
 def valid_box(box: list[float], w: int, h: int, min_px: float, max_frac: float) -> bool:
     x1, y1, x2, y2 = box
     bw, bh = x2 - x1, y2 - y1
     if bw < min_px or bh < min_px:
-        return False               # degenerate / sub-pixel
+        return False                       # degenerate / sub-pixel
     if bw > max_frac * w and bh > max_frac * h:
-        return False               # spans almost the whole frame -> LA junk box
+        return False                       # near-full-frame -> LA junk box
     return True
 
 
-def frames_for(cams, limit) -> list[Path]:
+def frames_for(cams, limit, include_manual) -> list[Path]:
     imgs: list[Path] = []
     for cam_dir in sorted(p for p in FRAMES_DIR.iterdir() if p.is_dir()):
-        if cams and cam_dir.name not in cams:
-            continue
+        name = cam_dir.name
+        if cams:                                  # explicit list overrides the reserve
+            if name not in cams:
+                continue
+        elif name in MANUAL_CAMS and not include_manual:
+            continue                              # reserved for hand-labeling
         cam_imgs = sorted(cam_dir.glob("*.jpg"))
-        if limit:
-            cam_imgs = cam_imgs[:limit]
-        imgs.extend(cam_imgs)
+        imgs.extend(cam_imgs[:limit] if limit else cam_imgs)
     return imgs
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--scheme", choices=list(SCHEMES), default="bag2")
     ap.add_argument("--cams", nargs="*", default=None)
-    ap.add_argument("--limit", type=int, default=None, help="max frames per cam (trial runs)")
+    ap.add_argument("--limit", type=int, default=None, help="max frames per cam (trials)")
     ap.add_argument("--load-4bit", action="store_true", help="NF4 (fits 8 GB, ~5x faster)")
     ap.add_argument("--max-side", type=int, default=1024)
     ap.add_argument("--max-new-tokens", type=int, default=1024)
-    ap.add_argument("--prompts", nargs="+", default=CLASSES,
-                    help="grounding prompts; must be a subset of the class names")
-    ap.add_argument("--min-px", type=float, default=6.0, help="drop boxes smaller than this")
-    ap.add_argument("--max-frac", type=float, default=0.95, help="drop near-full-frame boxes")
+    ap.add_argument("--min-px", type=float, default=6.0)
+    ap.add_argument("--max-frac", type=float, default=0.95)
+    ap.add_argument("--include-manual", action="store_true",
+                    help=f"also pseudo-label the reserved dense cams {sorted(MANUAL_CAMS)}")
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
 
@@ -91,27 +104,35 @@ def main() -> None:
 
     from vlm.providers import LocateAnythingProvider
 
-    unknown = [p for p in args.prompts if p not in CLASS_ID]
-    if unknown:
-        sys.exit(f"prompts must be class names {CLASSES}; got unknown {unknown}")
+    scheme = SCHEMES[args.scheme]
+    class_names = [lbl for lbl, _ in scheme]
+    class_id = {lbl: i for i, lbl in enumerate(class_names)}
 
-    imgs = frames_for(args.cams, args.limit)
+    imgs = frames_for(args.cams, args.limit, args.include_manual)
     if not imgs:
         sys.exit(f"No frames under {FRAMES_DIR} (run sample_frames.py first).")
+    if not args.cams and not args.include_manual:
+        print(f"Reserved for MANUAL hand-labeling (skipped): {sorted(MANUAL_CAMS)} "
+              "(dense library baggage — draw fresh in CVAT).")
 
     prov = LocateAnythingProvider(load_in_4bit=args.load_4bit, max_side=args.max_side,
                                   max_new_tokens=args.max_new_tokens)
-    print(f"loading LA ({'4-bit' if args.load_4bit else 'fp16'})...")
+    print(f"scheme={args.scheme} classes={class_names} | loading LA "
+          f"({'4-bit' if args.load_4bit else 'fp16'})...")
     prov.load()
     revision = getattr(getattr(prov._model, "config", None), "_commit_hash", "") or ""
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "classes.txt").write_text("\n".join(CLASSES) + "\n", encoding="utf-8")
+    (OUT_DIR / "classes.txt").write_text("\n".join(class_names) + "\n", encoding="utf-8")
     (OUT_DIR / "data.yaml").write_text(
-        f"path: {OUT_DIR.as_posix()}\nnc: {len(CLASSES)}\n"
-        f"names: {CLASSES}\n", encoding="utf-8")
+        f"path: {OUT_DIR.as_posix()}\nnc: {len(class_names)}\nnames: {class_names}\n",
+        encoding="utf-8")
+    (OUT_DIR.parent / "MANUAL_CAMS.txt").write_text(
+        "Hand-label these cams from scratch in CVAT (dense library baggage; NOT "
+        "pseudo-labeled — LA triple-counts static racks):\n"
+        + "\n".join(sorted(MANUAL_CAMS)) + "\n", encoding="utf-8")
 
-    manifest_rows: list[dict] = []
+    rows: list[dict] = []
     t_start = time.time()
     for i, fp in enumerate(imgs, 1):
         cam = fp.parent.name
@@ -122,45 +143,45 @@ def main() -> None:
         img = Image.open(fp).convert("RGB")
         w, h = img.size
         t0 = time.time()
-        boxes = prov.ground(img, args.prompts)
 
-        lines, per_class = [], {c: 0 for c in CLASSES}
-        for b in boxes:
-            if b["label"] not in CLASS_ID or not valid_box(b["box"], w, h, args.min_px, args.max_frac):
-                continue
-            cx, cy, bw, bh = to_yolo(b["box"], w, h)
-            lines.append(f"{CLASS_ID[b['label']]} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
-            per_class[b["label"]] += 1
+        # One ground() call per class so each box gets a definite label; dedup is
+        # per-label inside ground(). person and bag legitimately overlap -> we do
+        # NOT NMS across classes.
+        lines, per_class = [], {c: 0 for c in class_names}
+        for lbl, prompt_text in scheme:
+            for b in prov.ground(img, [prompt_text]):
+                if not valid_box(b["box"], w, h, args.min_px, args.max_frac):
+                    continue
+                cx, cy, bw, bh = to_yolo(b["box"], w, h)
+                lines.append(f"{class_id[lbl]} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+                per_class[lbl] += 1
         out_txt.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
-        manifest_rows.append({"cam_id": cam, "file": fp.name, "n_boxes": len(lines),
-                              **per_class, "secs": round(time.time() - t0, 1)})
-        dt = time.time() - t_start
-        eta = dt / i * (len(imgs) - i)
+        rows.append({"cam_id": cam, "file": fp.name, "n_boxes": len(lines),
+                     **per_class, "secs": round(time.time() - t0, 1)})
+        eta = (time.time() - t_start) / i * (len(imgs) - i)
         print(f"[{i}/{len(imgs)}] {cam}/{fp.name}: {len(lines)} boxes "
               f"({', '.join(f'{k}={v}' for k, v in per_class.items() if v)}) "
-              f"| {manifest_rows[-1]['secs']}s | ETA {eta/60:.0f}m")
+              f"| {rows[-1]['secs']}s | ETA {eta/60:.0f}m")
 
-    # merge-append manifest (like sample_frames), keep other cams' rows
     man = OUT_DIR / "manifest.csv"
-    fields = ["cam_id", "file", "n_boxes", *CLASSES, "secs"]
-    processed_files = {(r["cam_id"], r["file"]) for r in manifest_rows}
+    fields = ["cam_id", "file", "n_boxes", *class_names, "secs"]
+    done = {(r["cam_id"], r["file"]) for r in rows}
     prev = []
     if man.exists():
         with open(man, newline="", encoding="utf-8") as f:
-            prev = [r for r in csv.DictReader(f)
-                    if (r["cam_id"], r["file"]) not in processed_files]
-    allrows = prev + manifest_rows
+            prev = [r for r in csv.DictReader(f) if (r["cam_id"], r["file"]) not in done
+                    and set(r.keys()) >= set(fields)]
     with open(man, "w", newline="", encoding="utf-8") as f:
         wtr = csv.DictWriter(f, fieldnames=fields)
         wtr.writeheader()
-        for r in allrows:
+        for r in prev + rows:
             wtr.writerow({k: r.get(k, "") for k in fields})
 
-    tot = sum(r["n_boxes"] for r in manifest_rows)
-    print(f"\nLabeled {len(manifest_rows)} new frames, {tot} candidate boxes -> "
-          f"{OUT_DIR.relative_to(ROOT)}/  (model nvidia/LocateAnything-3B rev {revision[:12] or '?'})")
-    print("These are CANDIDATE labels — import into CVAT and correct before training (§5.2 audit gate).")
+    tot = sum(r["n_boxes"] for r in rows)
+    print(f"\nLabeled {len(rows)} new frames, {tot} candidate boxes ({args.scheme}) -> "
+          f"{OUT_DIR.relative_to(ROOT)}/  (nvidia/LocateAnything-3B rev {revision[:12] or '?'})")
+    print("CANDIDATE labels — import into CVAT, assign bag subclass + correct (§5.2 audit gate).")
 
 
 if __name__ == "__main__":
