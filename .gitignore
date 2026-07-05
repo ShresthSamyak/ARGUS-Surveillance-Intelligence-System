@@ -48,6 +48,9 @@ env/
 .env
 *.local
 
+# Working handoff / session log (local-only, not for the repo)
+HANDOFF.md
+
 # OS / editor
 .DS_Store
 Thumbs.db
