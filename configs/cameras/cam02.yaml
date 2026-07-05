@@ -1,0 +1,15 @@
+# ADMIN  Block_010-Outside C-119_ADMIN  (ADMIN  Block_010-Outside C-119_ADMIN_20260211152121_20260211154213_380215163.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam02
+name: ADMIN  Block_010-Outside C-119_ADMIN
+uri: data/raw/cam02.mp4
+fps: 25.0
+width: 1280
+height: 720
+det_stride: 2
+homography: null
+zones: []
+thresholds: {}
+source_filename: ADMIN  Block_010-Outside C-119_ADMIN_20260211152121_20260211154213_380215163.mp4
+start_time: '2026-02-11T15:21:21'
+end_time: '2026-02-11T15:42:13'

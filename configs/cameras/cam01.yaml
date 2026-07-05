@@ -1,0 +1,15 @@
+# ADMIN  Block_009-Near C-120-Chemical Corridor_ADMIN  (ADMIN  Block_009-Near C-120-Chemical Corridor_ADMIN_20260211152127_20260211154456_379936790.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam01
+name: ADMIN  Block_009-Near C-120-Chemical Corridor_ADMIN
+uri: data/raw/cam01.mp4
+fps: 25.0
+width: 1280
+height: 720
+det_stride: 2
+homography: null
+zones: []
+thresholds: {}
+source_filename: ADMIN  Block_009-Near C-120-Chemical Corridor_ADMIN_20260211152127_20260211154456_379936790.mp4
+start_time: '2026-02-11T15:21:27'
+end_time: '2026-02-11T15:44:56'

@@ -1,0 +1,15 @@
+# LIBRARY 2_Baggage Area_LIBRARY 2  (LIBRARY 2_Baggage Area_LIBRARY 2_20260217135125_20260217141800_378991963.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam06
+name: LIBRARY 2_Baggage Area_LIBRARY 2
+uri: data/raw/cam06.mp4
+fps: 25.0
+width: 2560
+height: 1440
+det_stride: 2
+homography: null
+zones: []
+thresholds: {}
+source_filename: LIBRARY 2_Baggage Area_LIBRARY 2_20260217135125_20260217141800_378991963.mp4
+start_time: '2026-02-17T13:51:25'
+end_time: '2026-02-17T14:18:00'

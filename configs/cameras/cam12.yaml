@@ -1,0 +1,15 @@
+# Road_Hostel-H Chownk_Road  (Road_Hostel-H Chownk_Road_20260217171141_20260217174138_155115.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam12
+name: Road_Hostel-H Chownk_Road
+uri: data/raw/cam12.mp4
+fps: 20.0
+width: 3200
+height: 1800
+det_stride: 1
+homography: null
+zones: []
+thresholds: {}
+source_filename: Road_Hostel-H Chownk_Road_20260217171141_20260217174138_155115.mp4
+start_time: '2026-02-17T17:11:41'
+end_time: '2026-02-17T17:41:38'

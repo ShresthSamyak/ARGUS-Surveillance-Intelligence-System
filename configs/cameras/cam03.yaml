@@ -1,0 +1,15 @@
+# Admin block2_034-Near B301_Admin block2  (Admin block2_034-Near B301_Admin block2_20260211174559_20260211180915_379582208.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam03
+name: Admin block2_034-Near B301_Admin block2
+uri: data/raw/cam03.mp4
+fps: 25.0
+width: 1280
+height: 720
+det_stride: 2
+homography: null
+zones: []
+thresholds: {}
+source_filename: Admin block2_034-Near B301_Admin block2_20260211174559_20260211180915_379582208.mp4
+start_time: '2026-02-11T17:45:59'
+end_time: '2026-02-11T18:09:15'

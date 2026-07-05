@@ -1,0 +1,15 @@
+# Parking_Towards Learning Block_Parking  (Parking_Towards Learning Block_Parking_20260211165112_20260211171238_381229524.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam11
+name: Parking_Towards Learning Block_Parking
+uri: data/raw/cam11.mp4
+fps: 20.0
+width: 2560
+height: 1440
+det_stride: 1
+homography: null
+zones: []
+thresholds: {}
+source_filename: Parking_Towards Learning Block_Parking_20260211165112_20260211171238_381229524.mp4
+start_time: '2026-02-11T16:51:12'
+end_time: '2026-02-11T17:12:38'

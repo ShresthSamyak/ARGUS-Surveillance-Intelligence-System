@@ -1,0 +1,15 @@
+# Main_Gate_Entry_Tiet_Gates_Tiet_Gates  (Main_Gate_Entry_Tiet_Gates_Tiet_Gates_20260211091729_20260211092002_378687986.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam10
+name: Main_Gate_Entry_Tiet_Gates_Tiet_Gates
+uri: data/raw/cam10.mp4
+fps: 20.0
+width: 3072
+height: 2048
+det_stride: 1
+homography: null
+zones: []
+thresholds: {}
+source_filename: Main_Gate_Entry_Tiet_Gates_Tiet_Gates_20260211091729_20260211092002_378687986.mp4
+start_time: '2026-02-11T09:17:29'
+end_time: '2026-02-11T09:20:02'

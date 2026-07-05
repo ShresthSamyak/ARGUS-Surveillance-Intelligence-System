@@ -1,0 +1,15 @@
+# CSED  (CSED_20260211164108_20260211165831_380718596.mp4)
+# Auto-generated stub. Calibrate homography + define zones before L2 runs.
+id: cam05
+name: CSED
+uri: data/raw/cam05.mp4
+fps: 25.0
+width: 2688
+height: 1520
+det_stride: 2
+homography: null
+zones: []
+thresholds: {}
+source_filename: CSED_20260211164108_20260211165831_380718596.mp4
+start_time: '2026-02-11T16:41:08'
+end_time: '2026-02-11T16:58:31'
