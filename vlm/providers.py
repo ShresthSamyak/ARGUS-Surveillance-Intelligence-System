@@ -66,13 +66,15 @@ class LocateAnythingProvider:
 
     def __init__(self, model_id: str = "nvidia/LocateAnything-3B", device: str = "cuda",
                  dtype: str = "bfloat16", max_side: int = 1536,
-                 generation_mode: str = "hybrid", max_new_tokens: int = 8192):
+                 generation_mode: str = "hybrid", max_new_tokens: int = 8192,
+                 load_in_4bit: bool = False):
         self.model_id = model_id
         self.device = device
         self.dtype = dtype
         self.max_side = max_side
         self.generation_mode = generation_mode
         self.max_new_tokens = max_new_tokens
+        self.load_in_4bit = load_in_4bit   # NF4 via bitsandbytes to fit the 8 GB card
         self._model = None
         self._tok = None
         self._proc = None
@@ -82,8 +84,20 @@ class LocateAnythingProvider:
         from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
         td = {"bfloat16": torch.bfloat16, "float16": torch.float16}.get(self.dtype, "auto")
-        self._model = AutoModel.from_pretrained(
-            self.model_id, trust_remote_code=True, dtype=td).to(self.device).eval()
+        if self.load_in_4bit:
+            from transformers import BitsAndBytesConfig
+            qcfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+            self._model = AutoModel.from_pretrained(
+                self.model_id, trust_remote_code=True,
+                quantization_config=qcfg, device_map={"": 0}).eval()
+        else:
+            self._model = AutoModel.from_pretrained(
+                self.model_id, trust_remote_code=True, dtype=td).to(self.device).eval()
         self._tok = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
         self._proc = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
 

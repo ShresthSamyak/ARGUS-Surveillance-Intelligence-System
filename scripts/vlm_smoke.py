@@ -45,6 +45,7 @@ def main() -> None:
     ap.add_argument("--max-side", type=int, default=1280)
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16"])
     ap.add_argument("--max-new-tokens", type=int, default=4096)
+    ap.add_argument("--load-4bit", action="store_true", help="NF4 quantize to fit 8 GB")
     args = ap.parse_args()
 
     import torch
@@ -66,7 +67,8 @@ def main() -> None:
 
     from vlm.providers import LocateAnythingProvider
     prov = LocateAnythingProvider(model_id=args.model, device=dev, dtype=args.dtype,
-                                  max_side=args.max_side, max_new_tokens=args.max_new_tokens)
+                                  max_side=args.max_side, max_new_tokens=args.max_new_tokens,
+                                  load_in_4bit=args.load_4bit)
 
     print("\n[1/2] loading model (first run downloads ~7 GB)...")
     t0 = time.time()
