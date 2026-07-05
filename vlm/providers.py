@@ -124,7 +124,9 @@ class LocateAnythingProvider:
                 generation_mode=self.generation_mode,
                 use_cache=True,
             )
-        return self._tok.decode(out[0], skip_special_tokens=False)
+        # LA.generate() already returns the decoded answer string (verbose=False),
+        # or a (text, history, info) tuple when verbose=True.
+        return out[0] if isinstance(out, tuple) else out
 
     def ground(self, img, prompts: list[str]) -> list[dict]:
         if self._model is None:
