@@ -95,21 +95,34 @@ class LocateAnythingProvider:
         return img
 
     def _detect_one(self, img, category: str) -> str:
-        """Run one detection prompt; return the raw model answer string."""
+        """Run one detection prompt; return the raw model answer string.
+
+        LA's custom processor (processing_locateanything.py) wants images as a LIST
+        and a chat-formatted prompt with an <image-1> placeholder built by
+        py_apply_chat_template. Its model.generate() asserts use_cache=True and
+        batch_size==1, and converts a numpy image_grid_hws onto the pixel device.
+        """
         import torch
 
         prompt = _DETECT_TMPL.format(cats=category)
-        inputs = self._proc(text=prompt, images=img, return_tensors="pt").to(self.device)
+        messages = [{"role": "user",
+                     "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+        text = self._proc.py_apply_chat_template(messages, add_generation_prompt=True)
+        inputs = self._proc(images=[img], text=text, return_tensors="pt")
+        pixel_values = inputs["pixel_values"].to(self.device)
+        input_ids = inputs["input_ids"].to(self.device)
+        attention_mask = inputs["attention_mask"].to(self.device)
+        image_grid_hws = inputs["image_grid_hws"]   # numpy; generate() moves it to device
         with torch.inference_mode():
             out = self._model.generate(
-                pixel_values=inputs["pixel_values"],
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                image_grid_hws=inputs.get("image_grid_hws"),
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                image_grid_hws=image_grid_hws,
                 tokenizer=self._tok,
                 max_new_tokens=self.max_new_tokens,
                 generation_mode=self.generation_mode,
-                do_sample=False,
+                use_cache=True,
             )
         return self._tok.decode(out[0], skip_special_tokens=False)
 
