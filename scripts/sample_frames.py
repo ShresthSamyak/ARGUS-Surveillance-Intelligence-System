@@ -100,15 +100,14 @@ def scan(path: Path, probe_stride: int, scan_w: int, bag_detector=None):
             break
         if idx % probe_stride == 0:
             ok, frame = cap.retrieve()
-            if not ok:
-                break
-            h, w = frame.shape[:2]
-            small = cv2.resize(frame, (scan_w, max(1, int(h * scan_w / w))))
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            fg = mog.apply(gray)
-            motion = float((fg > 0).mean())   # fraction of moving pixels
-            bag = bag_detector(frame) if bag_detector else 0.0
-            scores.append((idx, motion, bag))
+            if ok:   # a single undecodable frame must NOT abort the whole scan
+                h, w = frame.shape[:2]
+                small = cv2.resize(frame, (scan_w, max(1, int(h * scan_w / w))))
+                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                fg = mog.apply(gray)
+                motion = float((fg > 0).mean())   # fraction of moving pixels
+                bag = bag_detector(frame) if bag_detector else 0.0
+                scores.append((idx, motion, bag))
         idx += 1
         pbar.update(1)
     pbar.close()
@@ -166,6 +165,8 @@ def extract(path: Path, cam_id: str, frame_idxs: list[int], out_dir: Path) -> li
     cap = cv2.VideoCapture(str(path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.jpg"):     # clear stale frames so a re-run leaves no orphans
+        old.unlink()
     rows: list[dict] = []
     idx = 0
     pbar = tqdm(total=len(targets), desc=f"write {cam_id}", unit="img", leave=False)
@@ -246,13 +247,24 @@ def main() -> None:
 
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
     manifest = FRAMES_DIR / "manifest.csv"
+    fields = ["cam_id", "file", "frame_idx", "timestamp_s", "bag_score", "source"]
+    processed = {c.stem for c in clips}
+    # Merge: preserve manifest rows for cams NOT (re)processed this run, so
+    # `--cams cam09` updates only cam09 instead of clobbering the whole manifest.
+    merged: list[dict] = []
+    if manifest.exists():
+        with open(manifest, newline="", encoding="utf-8") as f:
+            merged = [r for r in csv.DictReader(f) if r.get("cam_id") not in processed]
+    merged.extend(all_rows)
+    merged.sort(key=lambda r: (r["cam_id"], int(r["frame_idx"])))
     with open(manifest, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(
-            f, fieldnames=["cam_id", "file", "frame_idx", "timestamp_s", "bag_score", "source"])
+        w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
-        w.writerows(all_rows)
+        for r in merged:
+            w.writerow({k: r.get(k, "") for k in fields})
     summary = f" ({n_bag_total} bag-prioritized)" if args.balance_by_class else ""
-    print(f"\nTotal {len(all_rows)} frames{summary} -> {FRAMES_DIR.relative_to(ROOT)}/  (manifest.csv)")
+    print(f"\nWrote {len(all_rows)} rows for {sorted(processed)}; manifest now {len(merged)} "
+          f"rows{summary} -> {FRAMES_DIR.relative_to(ROOT)}/manifest.csv")
 
 
 if __name__ == "__main__":
