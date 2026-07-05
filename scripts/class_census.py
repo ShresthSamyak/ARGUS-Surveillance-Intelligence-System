@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+# Reduce fragmentation on the 8 GB card; set before torch/ultralytics import.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -44,18 +48,45 @@ def iter_frame_groups(cams: list[str] | None):
             yield cam_dir.name, imgs
 
 
-def census_frames(model, cams, conf, imgsz) -> dict[str, dict[str, int]]:
+def predict_batched(model, items, conf, imgsz, batch):
+    """Yield Results for `items` (paths or frames) in OOM-safe chunks.
+
+    The original code passed a whole camera's image list (up to 209) to predict in
+    one call — ultralytics batches a list into a single forward, which OOMs an 8 GB
+    card at imgsz 1280. Here we chunk to `batch`; on CUDA OOM we empty the cache and
+    halve the batch (down to 1) and retry the same chunk.
+    """
+    import torch
+
+    i, bs, n = 0, max(1, batch), len(items)
+    while i < n:
+        chunk = items[i:i + bs]
+        try:
+            for r in model.predict(source=chunk, conf=conf, imgsz=imgsz,
+                                   classes=KEEP_IDS, verbose=False):
+                yield r
+            i += len(chunk)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if bs == 1:
+                raise
+            bs = max(1, bs // 2)
+            print(f"  [oom] batch too big, retrying at batch={bs}")
+
+
+def census_frames(model, cams, conf, imgsz, batch) -> dict[str, dict[str, int]]:
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for cam_id, imgs in iter_frame_groups(cams):
-        for r in model.predict(source=[str(p) for p in imgs], conf=conf, imgsz=imgsz,
-                               classes=KEEP_IDS, verbose=False, stream=True):
+        paths = [str(p) for p in imgs]
+        for r in predict_batched(model, paths, conf, imgsz, batch):
             counts[cam_id]["_frames"] += 1
             for c in r.boxes.cls.tolist():
                 counts[cam_id][COCO_CLASSES[int(c)]] += 1
+        print(f"  {cam_id}: scanned {counts[cam_id]['_frames']} frames")
     return counts
 
 
-def census_video(model, cams, conf, imgsz, stride) -> dict[str, dict[str, int]]:
+def census_video(model, cams, conf, imgsz, stride, batch) -> dict[str, dict[str, int]]:
     import cv2
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     clips = sorted(RAW_DIR.glob("*.mp4"))
@@ -64,29 +95,27 @@ def census_video(model, cams, conf, imgsz, stride) -> dict[str, dict[str, int]]:
     for clip in clips:
         cap = cv2.VideoCapture(str(clip))
         idx = 0
-        batch = []
+        frames: list = []
         while True:
-            ok = cap.grab()
-            if not ok:
+            if not cap.grab():
                 break
             if idx % stride == 0:
                 ok, frame = cap.retrieve()
                 if ok:
-                    batch.append(frame)
+                    frames.append(frame)
             idx += 1
-            if len(batch) == 16:
-                _tally(model, batch, clip.stem, counts, conf, imgsz)
-                batch = []
-        if batch:
-            _tally(model, batch, clip.stem, counts, conf, imgsz)
+            if len(frames) >= batch:
+                _tally(model, frames, clip.stem, counts, conf, imgsz, batch)
+                frames = []
+        if frames:
+            _tally(model, frames, clip.stem, counts, conf, imgsz, batch)
         cap.release()
         print(f"  {clip.stem}: scanned {counts[clip.stem]['_frames']} frames")
     return counts
 
 
-def _tally(model, batch, cam_id, counts, conf, imgsz) -> None:
-    for r in model.predict(source=batch, conf=conf, imgsz=imgsz, classes=KEEP_IDS,
-                           verbose=False):
+def _tally(model, frames, cam_id, counts, conf, imgsz, batch) -> None:
+    for r in predict_batched(model, frames, conf, imgsz, batch):
         counts[cam_id]["_frames"] += 1
         for c in r.boxes.cls.tolist():
             counts[cam_id][COCO_CLASSES[int(c)]] += 1
@@ -124,6 +153,8 @@ def main() -> None:
     ap.add_argument("--from-video", action="store_true",
                     help="sample clips directly instead of using data/frames/")
     ap.add_argument("--stride", type=int, default=25, help="frame stride for --from-video")
+    ap.add_argument("--batch", type=int, default=8,
+                    help="images per forward pass (auto-halves on CUDA OOM; lower if 8GB tight)")
     ap.add_argument("--out", type=Path, default=FRAMES_DIR / "class_census.csv")
     args = ap.parse_args()
 
@@ -137,9 +168,9 @@ def main() -> None:
 
     model = YOLO(args.weights)
     if args.from_video:
-        counts = census_video(model, args.cams, args.conf, args.imgsz, args.stride)
+        counts = census_video(model, args.cams, args.conf, args.imgsz, args.stride, args.batch)
     else:
-        counts = census_frames(model, args.cams, args.conf, args.imgsz)
+        counts = census_frames(model, args.cams, args.conf, args.imgsz, args.batch)
 
     if not counts:
         sys.exit("No frames found to census.")
