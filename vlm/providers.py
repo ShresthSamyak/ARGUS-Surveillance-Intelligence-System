@@ -41,6 +41,33 @@ class VLMProvider(Protocol):
 PROVIDERS = ("locateanything3b", "florence2", "grounding_dino", "owlv2")
 
 
+def _iou(a: list[float], b: list[float]) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def dedup_nms(boxes: list[dict], iou_thresh: float = 0.9) -> list[dict]:
+    """Collapse LA's degenerate repeated/near-identical boxes (per label).
+
+    LA loops on cluttered scenes, emitting the same box many times. Greedy NMS at
+    a HIGH iou_thresh (0.9) removes near-duplicates while keeping genuinely distinct
+    nearby objects (two bags side by side survive). No scores from LA, so we keep the
+    first occurrence and prefer the larger box on ties.
+    """
+    kept: list[dict] = []
+    for b in sorted(boxes, key=lambda d: (d["box"][2]-d["box"][0])*(d["box"][3]-d["box"][1]),
+                    reverse=True):
+        if any(b["label"] == k["label"] and _iou(b["box"], k["box"]) >= iou_thresh
+               for k in kept):
+            continue
+        kept.append(b)
+    return kept
+
+
 def parse_boxes(answer: str, width: int, height: int, label: str) -> list[dict]:
     """Parse <box>..</box> tokens (coords in [0,1000]) into pixel-space dicts."""
     out = []
@@ -152,7 +179,7 @@ class LocateAnythingProvider:
             answer = self._detect_one(img, category)
             # parse against ORIGINAL size (coords are normalized, so scale-invariant)
             results.extend(parse_boxes(answer, orig_w, orig_h, label=category))
-        return results
+        return dedup_nms(results)   # collapse LA's degenerate repeats
 
 
 def load_provider(name: str, **kwargs) -> VLMProvider:
