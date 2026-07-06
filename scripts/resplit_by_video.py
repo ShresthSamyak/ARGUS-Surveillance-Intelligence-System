@@ -1,46 +1,143 @@
 """Re-split detection labels by VIDEO, not by frame (§9.2 — run before training).
 
 The #1 dataset risk: if train/val was split randomly over frames, val is
-near-duplicate frames of train and every mAP is fiction. This holds out entire
+near-duplicate frames of train and every mAP is fiction. This holds out ENTIRE
 clips (e.g. one corridor, one gate, one baggage cam) so no frame from a val clip
 ever appears in train.
 
-Operates on the labeled dataset once it exists (data/labels/ + data/frames/).
-It is a NO-OP today because there are no hand labels yet — the ingestion pipeline
-(sample_frames.py -> CVAT labeling) has to produce them first. Kept as the
-canonical splitter so it's ready the moment labels land.
+Builds a standard Ultralytics dataset at --out with images/{train,val} and
+labels/{train,val}, populated by HARD LINKS (same NTFS volume, no admin, no
+duplication; falls back to symlink then copy). Emits data.yaml. Reads class names
+from the labels dir (classes.txt or data.yaml), so it works for the 2-class pseudo
+set or the corrected 4-class set alike.
 
-    python scripts/resplit_by_video.py --val-cams cam02 cam08 cam11
+    python scripts/resplit_by_video.py --val-cams cam03 cam08          # corrected labels
+    python scripts/resplit_by_video.py --labels-dir data/labels/pseudo --val-cams cam03 cam08
+
+Runs in base env (no GPU).
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMES_DIR = ROOT / "data" / "frames"
-LABELS_DIR = ROOT / "data" / "labels"
+PLACEHOLDER_CLASS = "bag"   # the un-subclassed CVAT placeholder; must be gone post-correction
+
+
+def read_class_names(labels_dir: Path) -> list[str]:
+    dy = labels_dir / "data.yaml"
+    if dy.exists():
+        import yaml
+        names = yaml.safe_load(dy.read_text(encoding="utf-8")).get("names")
+        if names:
+            return list(names)
+    ct = labels_dir / "classes.txt"
+    if ct.exists():
+        return [ln.strip() for ln in ct.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    sys.exit(f"No class names found in {labels_dir} (need classes.txt or data.yaml).")
+
+
+def link_file(src: Path, dst: Path, mode: str) -> str:
+    if dst.exists():
+        dst.unlink()
+    if mode == "hardlink":
+        try:
+            os.link(src, dst)
+            return "hardlink"
+        except OSError:
+            mode = "symlink"
+    if mode == "symlink":
+        try:
+            os.symlink(src, dst)
+            return "symlink"
+        except OSError:
+            mode = "copy"
+    shutil.copy2(src, dst)
+    return "copy"
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--val-cams", nargs="+", required=False,
-                    help="cam ids to hold out entirely as validation")
-    ap.add_argument("--out", type=Path, default=ROOT / "data" / "split")
-    ap.parse_args()
+    ap.add_argument("--val-cams", nargs="+", required=True,
+                    help="cam ids to hold out ENTIRELY as validation")
+    ap.add_argument("--labels-dir", type=Path, default=ROOT / "data" / "labels" / "corrected",
+                    help="YOLO labels root (per-cam subdirs). Default: corrected/")
+    ap.add_argument("--frames-dir", type=Path, default=FRAMES_DIR)
+    ap.add_argument("--out", type=Path, default=ROOT / "data" / "dataset")
+    ap.add_argument("--link", choices=["hardlink", "symlink", "copy"], default="hardlink")
+    ap.add_argument("--allow-placeholder", action="store_true",
+                    help="permit the un-subclassed 'bag' class (e.g. splitting pseudo labels)")
+    args = ap.parse_args()
 
-    if not LABELS_DIR.exists() or not any(LABELS_DIR.rglob("*.txt")):
-        sys.exit(
-            "No labels found in data/labels/. This script splits an EXISTING labeled\n"
-            "set by video. First: sample_frames.py -> label in CVAT -> export YOLO txt,\n"
-            "then re-run with --val-cams to hold out whole clips (§9.2)."
-        )
-    raise NotImplementedError(
-        "Phase 1: write train/val frame lists partitioned by cam id, assert zero "
-        "cross-split clip leakage, emit an Ultralytics data.yaml."
-    )
+    if not args.labels_dir.exists() or not any(args.labels_dir.rglob("*.txt")):
+        sys.exit(f"No labels in {args.labels_dir}. Correct pseudo-labels in CVAT and export "
+                 "there first, or pass --labels-dir data/labels/pseudo for a dry split.")
+
+    names = read_class_names(args.labels_dir)
+    name_to_id = {n: i for i, n in enumerate(names)}
+    val_cams = set(args.val_cams)
+
+    cam_dirs = [d for d in sorted(args.labels_dir.iterdir()) if d.is_dir()]
+    all_cams = {d.name for d in cam_dirs}
+    missing = val_cams - all_cams
+    if missing:
+        sys.exit(f"--val-cams not found in {args.labels_dir}: {sorted(missing)} "
+                 f"(available: {sorted(all_cams)})")
+
+    for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+        (args.out / sub).mkdir(parents=True, exist_ok=True)
+
+    counts = {"train": defaultdict(int), "val": defaultdict(int)}
+    frames = {"train": 0, "val": 0}
+    link_modes: dict[str, int] = defaultdict(int)
+    placeholder_hits = 0
+    placeholder_id = name_to_id.get(PLACEHOLDER_CLASS)
+
+    for cam_dir in cam_dirs:
+        split = "val" if cam_dir.name in val_cams else "train"
+        for txt in sorted(cam_dir.glob("*.txt")):
+            img = args.frames_dir / cam_dir.name / (txt.stem + ".jpg")
+            if not img.exists():
+                continue
+            for ln in txt.read_text(encoding="utf-8").splitlines():
+                ln = ln.strip()
+                if ln:
+                    cid = int(ln.split()[0])
+                    counts[split][cid] += 1
+                    if cid == placeholder_id:
+                        placeholder_hits += 1
+            link_modes[link_file(img, args.out / f"images/{split}/{img.name}", args.link)] += 1
+            link_file(txt, args.out / f"labels/{split}/{txt.name}", args.link)
+            frames[split] += 1
+
+    # write data.yaml
+    dy = (f"# generated by resplit_by_video.py — split by video (no cross-clip leakage)\n"
+          f"path: {args.out.resolve().as_posix()}\n"
+          f"train: images/train\nval: images/val\n"
+          f"nc: {len(names)}\nnames: {names}\n")
+    (args.out / "data.yaml").write_text(dy, encoding="utf-8")
+
+    print(f"val cams (held out): {sorted(val_cams)}")
+    print(f"train frames: {frames['train']} | val frames: {frames['val']}  "
+          f"(link mode: {dict(link_modes)})")
+    hdr = f"{'class':<12}{'train':>8}{'val':>8}"
+    print("\n" + hdr + "\n" + "-" * len(hdr))
+    for i, n in enumerate(names):
+        print(f"{n:<12}{counts['train'][i]:>8}{counts['val'][i]:>8}")
+    print(f"\ndata.yaml -> {(args.out / 'data.yaml').relative_to(ROOT)}")
+
+    if placeholder_id is not None and placeholder_hits and not args.allow_placeholder:
+        sys.exit(f"\nERROR: {placeholder_hits} boxes still labeled '{PLACEHOLDER_CLASS}' "
+                 "(un-subclassed). Finish CVAT reclassification, or pass --allow-placeholder "
+                 "for a dry run on pseudo labels.")
+    print("\nNo cross-clip leakage (each cam is wholly train XOR val). Ready for YOLO fine-tune.")
 
 
 if __name__ == "__main__":
