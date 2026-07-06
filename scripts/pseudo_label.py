@@ -71,6 +71,34 @@ def valid_box(box: list[float], w: int, h: int, min_px: float, max_frac: float) 
     return True
 
 
+def rebuild_manifest_from_disk(out_dir: Path, class_names: list[str]) -> int:
+    """Rebuild manifest.csv by scanning ALL label .txt on disk (interruption-proof).
+
+    An interrupted run leaves label files but never reaches the manifest write, so
+    a row-merge approach silently drops those frames. Reconstructing from the .txt
+    files (the real deliverable) always yields a complete, correct summary.
+    """
+    rows = []
+    for cam_dir in sorted(p for p in out_dir.iterdir() if p.is_dir()):
+        for txt in sorted(cam_dir.glob("*.txt")):
+            counts = [0] * len(class_names)
+            for ln in txt.read_text(encoding="utf-8").splitlines():
+                ln = ln.strip()
+                if ln:
+                    cid = int(ln.split()[0])
+                    if 0 <= cid < len(class_names):
+                        counts[cid] += 1
+            rows.append({"cam_id": cam_dir.name, "file": txt.stem + ".jpg",
+                         "n_boxes": sum(counts),
+                         **{c: counts[i] for i, c in enumerate(class_names)}})
+    fields = ["cam_id", "file", "n_boxes", *class_names]
+    with open(out_dir / "manifest.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
 def frames_for(cams, limit, include_manual) -> list[Path]:
     imgs: list[Path] = []
     for cam_dir in sorted(p for p in FRAMES_DIR.iterdir() if p.is_dir()):
@@ -98,15 +126,22 @@ def main() -> None:
     ap.add_argument("--include-manual", action="store_true",
                     help=f"also pseudo-label the reserved dense cams {sorted(MANUAL_CAMS)}")
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--manifest-only", action="store_true",
+                    help="rebuild manifest.csv from existing labels on disk, then exit (no GPU)")
     args = ap.parse_args()
-
-    from PIL import Image
-
-    from vlm.providers import LocateAnythingProvider
 
     scheme = SCHEMES[args.scheme]
     class_names = [lbl for lbl, _ in scheme]
     class_id = {lbl: i for i, lbl in enumerate(class_names)}
+
+    if args.manifest_only:
+        n = rebuild_manifest_from_disk(OUT_DIR, class_names)
+        print(f"manifest.csv rebuilt from {n} label files on disk.")
+        return
+
+    from PIL import Image
+
+    from vlm.providers import LocateAnythingProvider
 
     imgs = frames_for(args.cams, args.limit, args.include_manual)
     if not imgs:
@@ -164,23 +199,13 @@ def main() -> None:
               f"({', '.join(f'{k}={v}' for k, v in per_class.items() if v)}) "
               f"| {rows[-1]['secs']}s | ETA {eta/60:.0f}m")
 
-    man = OUT_DIR / "manifest.csv"
-    fields = ["cam_id", "file", "n_boxes", *class_names, "secs"]
-    done = {(r["cam_id"], r["file"]) for r in rows}
-    prev = []
-    if man.exists():
-        with open(man, newline="", encoding="utf-8") as f:
-            prev = [r for r in csv.DictReader(f) if (r["cam_id"], r["file"]) not in done
-                    and set(r.keys()) >= set(fields)]
-    with open(man, "w", newline="", encoding="utf-8") as f:
-        wtr = csv.DictWriter(f, fieldnames=fields)
-        wtr.writeheader()
-        for r in prev + rows:
-            wtr.writerow({k: r.get(k, "") for k in fields})
+    # Rebuild the whole manifest from disk — interruption-proof (see fn docstring).
+    total = rebuild_manifest_from_disk(OUT_DIR, class_names)
 
     tot = sum(r["n_boxes"] for r in rows)
-    print(f"\nLabeled {len(rows)} new frames, {tot} candidate boxes ({args.scheme}) -> "
-          f"{OUT_DIR.relative_to(ROOT)}/  (nvidia/LocateAnything-3B rev {revision[:12] or '?'})")
+    print(f"\nLabeled {len(rows)} new frames ({tot} boxes) this run; manifest now covers "
+          f"{total} frames ({args.scheme}) -> {OUT_DIR.relative_to(ROOT)}/  "
+          f"(nvidia/LocateAnything-3B rev {revision[:12] or '?'})")
     print("CANDIDATE labels — import into CVAT, assign bag subclass + correct (§5.2 audit gate).")
 
 
